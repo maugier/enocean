@@ -15,3 +15,5 @@ keywords = ["enocean", "domotic", "smarthome" ]
 num_enum = "0.5.7"
 serialport = "4.2.0"
 thiserror = "1.0.37"
+hex = "0.4.3"
+

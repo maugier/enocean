@@ -1,18 +1,36 @@
 //! ESP3 packet encoding and decoding
 
-use std::str::Utf8Error;
 
-use num_enum::TryFromPrimitive;
+use std::{str::{Utf8Error, FromStr}, fmt::Display};
+
+use num_enum::{TryFromPrimitive, IntoPrimitive};
 use thiserror::Error;
 
-use crate::frame::{ESP3Frame, ESP3FrameRef};
+use crate::{frame::{ESP3Frame, ESP3FrameRef}, enocean::Rorg};
 
 pub type ResponseCode = crate::enocean::ReturnCode;
 
-#[derive(Debug,Clone,Copy)]
+#[derive(Debug,Clone,Copy,Eq,PartialEq,Hash)]
 pub struct Address([u8; 4]);
 
 pub const BROADCAST: Address = Address([0xff,0xff,0xff,0xff]);
+
+impl Display for Address {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:02x}{:02x}{:02x}{:02x}", self.0[0], self.0[1], self.0[2], self.0[3])
+    }
+}
+
+impl FromStr for Address {
+    type Err = hex::FromHexError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut address = [0; 4];
+        hex::decode_to_slice(s, &mut address)?;
+        Ok(Self(address))
+    }
+}
+
 
 pub struct EEPProfileCode([u8; 3]);
 
@@ -22,15 +40,18 @@ pub enum ParseError {
     #[error("Packet too short")]        PacketTooShort,
     #[error("UTF8 decoding Error")]     UTF8(#[from] Utf8Error),
     #[error("Invalid result code")]     InvalidResultCode(u8),
+    #[error("Invalid primitive")]       InvalidPrimitive,
 }
 
-#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+#[derive(Debug,Clone,Copy,PartialEq,Eq,TryFromPrimitive,IntoPrimitive)]
+#[repr(u8)]
 pub enum SubtelNum {
     Send = 3, 
     Receive = 0,
 }
 
-#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+#[derive(Debug,Clone,Copy,PartialEq,Eq,TryFromPrimitive,IntoPrimitive)]
+#[repr(u8)]
 pub enum Security {
     None = 0,
     Obsolete = 1,
@@ -41,7 +62,7 @@ pub enum Security {
 
 #[derive(Debug,Clone,Copy)]
 pub struct RadioErp1<'a> {
-    pub choice: u8,
+    pub choice: Rorg,
     pub user_data: &'a [u8],
     pub sender_id: Address,
     pub status: u8,
@@ -99,7 +120,7 @@ pub enum CommonCommand<'a> {
 
 #[derive(Debug,Clone)]
 pub enum Packet<'a> {
-    //RadioErp1(RadioErp1<'a>),
+    RadioErp1(RadioErp1<'a>),
     Response(Response),
     //Event(Event<'a>),
     CommonCommand(CommonCommand<'a>),
@@ -121,6 +142,13 @@ impl VersionResponse {
     }
 
     pub fn decode(response: &Response) -> Result<Self, ParseError> {
+
+        fn fromcstr(s: &[u8]) -> Result<String, Utf8Error> {
+            let mut idx = 0;
+            while idx < s.len() && s[idx] == 0 { idx += 1 };
+            Ok(std::str::from_utf8(&s[..idx])?.to_owned())
+        }
+
         let d = &response.data;
         if d.len() != 32 {
             return Err(ParseError::PacketTooShort)
@@ -131,9 +159,43 @@ impl VersionResponse {
             api: Version { main: d[4], beta: d[5], alpha: d[6], build: d[7] },
             chip_id: Address(d[8..12].try_into().unwrap()),
             chip_version: d[12..16].try_into().unwrap(),
-            description: std::str::from_utf8(&d[16..32])?.to_owned(),
+            description: fromcstr(&d[16..32])?,
         })
 
+    }
+}
+
+impl Display for Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}.{}", self.main, self.beta, self.alpha, self.build)
+    }
+}
+
+impl Display for VersionResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} (APP:{}, API:{}, Chip address:{}, version {:?}", self.description, self.app, self.api, self.chip_id, self.chip_version)
+    }
+}
+
+impl<'a> RadioErp1<'a> {
+    pub fn encode(&self) -> ESP3Frame {
+        todo!()
+
+    }
+
+    pub fn decode(frame: ESP3FrameRef<'a>) -> Result<Self, ParseError> {
+        let payload_len = frame.data.len() - 6;
+        let opt_len = frame.optional_data.len();
+        Ok(Self { choice: Rorg::try_from_primitive(frame.data[0]).map_err(|_| ParseError::UnsupportedPacketType)?,
+                  user_data: &frame.data[1..][..payload_len],
+                  sender_id: Address(frame.data[1+payload_len..][..4].try_into().unwrap()),
+                  status: frame.data[5+payload_len],
+                  subtel_num: if opt_len >= 1 { Some(SubtelNum::try_from_primitive(frame.optional_data[0]).map_err(|_| ParseError::InvalidPrimitive)?) } 
+                              else { None },
+                  destination: if opt_len >= 5 { Some(Address(frame.optional_data[1..5].try_into().unwrap())) } else { None },
+                  rssi: if opt_len >= 6 { Some(frame.optional_data[5]) } else { None },
+                  security: if opt_len >= 7 { Some(Security::try_from_primitive(frame.optional_data[6]).map_err(|_| ParseError::InvalidPrimitive)?) } else { None }
+        })
     }
 }
 
@@ -174,6 +236,7 @@ impl<'a> Packet<'a> {
 
         use Packet::*;
         match &self {
+            &RadioErp1(erp) => erp.encode(),
             &CommonCommand(cmd) => cmd.encode(),
             &Response(resp) => resp.encode(),
             &Unknown { packet_type, data, optional } => ESP3Frame::assemble(*packet_type, data, optional),
@@ -182,6 +245,7 @@ impl<'a> Packet<'a> {
 
     pub fn decode(frame: ESP3FrameRef<'a>) -> Result<Self, ParseError> {
         match frame.packet_type {
+            0x01 => Ok(Self::RadioErp1(RadioErp1::decode(frame)?)),
             0x02 => Ok(Self::Response(Response::decode(frame)?)),
             _    => Err(ParseError::UnsupportedPacketType),
         }
