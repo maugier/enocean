@@ -1,6 +1,6 @@
 [package]
 name = "enocean"
-version = "0.2.56"
+version = "0.3.0"
 authors = ["pmirabel", "Maxime Augier <max@xolus.net>"]
 edition = "2021"
 description = "EnOcean serial protocol implementation."
