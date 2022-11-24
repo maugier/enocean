@@ -1,7 +1,7 @@
 //! Stateful link to an ESP3 device
 
 use serialport::{self, SerialPort};
-use std::collections::VecDeque;
+use std::{collections::VecDeque, time::Duration};
 
 use crate::{frame::{ESP3Frame, ESP3FrameRef}, FrameReadError, packet::{Packet, CommonCommand, Response, VersionResponse}, PacketError};
 
@@ -22,7 +22,7 @@ impl Port {
     pub fn open(port_name: &str) -> Result<Self, serialport::Error> {
         let baud_rate = 57600;
         let port = serialport::new(port_name, baud_rate)
-            //.timeout(Duration::from_millis(100))
+            .timeout(Duration::from_millis(100))
             .data_bits(serialport::DataBits::Eight)
             .parity(serialport::Parity::None)
             .stop_bits(serialport::StopBits::One)
