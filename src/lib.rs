@@ -1,5 +1,3 @@
-#![feature(cstr_from_bytes_until_nul)]
-
 extern crate serialport;
 
 use std::error::Error as StdError;
