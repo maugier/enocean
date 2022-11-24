@@ -10,7 +10,7 @@ use crate::{frame::{ESP3Frame, ESP3FrameRef}, enocean::Rorg};
 
 pub type ResponseCode = crate::enocean::ReturnCode;
 
-#[derive(Debug,Clone,Copy,Eq,PartialEq,Hash)]
+#[derive(Debug,Clone,Copy,Eq,PartialEq,Hash,PartialOrd,Ord)]
 pub struct Address([u8; 4]);
 
 pub const BROADCAST: Address = Address([0xff,0xff,0xff,0xff]);
